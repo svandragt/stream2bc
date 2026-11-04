@@ -1,0 +1,52 @@
+# tidal2bc
+
+Finds Tidal albums where you favourited at least two tracks, and helps you add each album to your Bandcamp wishlist.
+
+The script lists the albums on a web page, with a Bandcamp search link for each one. A userscript in your own browser adds an album to your wishlist when you open it from that page.
+
+## Set up
+
+1. Log in to Tidal once. The command prints a link, which you open and approve:
+
+   ```sh
+   uv run tidal2bc.py --login
+   ```
+
+2. Install `tidal2bc.user.js` in Tampermonkey or Violentmonkey.
+
+The Tidal session is stored in `~/.config/tidal2bc/tidal-session.json`, readable only by you. It stays on your machine. Your Bandcamp login stays in your browser. The script never contacts Bandcamp.
+
+## Find albums
+
+```sh
+uv run tidal2bc.py
+```
+
+The script writes `out/albums.html`, which lists the albums that currently have enough favourites, with their current counts. Albums that appeared most recently come first. An album you unfavourite drops off the page. The script remembers when it first listed each album in `~/.config/tidal2bc/seen.json`.
+
+To run it daily at 07:00 from cron:
+
+```cron
+0 7 * * * cd /path/to/tidal2bc && uv run tidal2bc.py
+```
+
+If the Tidal session has expired, the script exits with an error and does not wait for input. Run `--login` again.
+
+## Add albums to your wishlist
+
+1. Open `out/albums.html` in your browser and log in to Bandcamp.
+2. Click a search link. The Bandcamp search opens in a new tab.
+3. Click the matching album.
+
+The album is added to your wishlist when it opens. The button in the corner changes to "Wishlisted by tidal2bc", or to "tidal2bc: failed, see console".
+
+Albums you open any other way are not added automatically. On those pages, click **Add to wishlist (tidal2bc)** to add the album, and an alert says whether it worked. To turn the automatic adding off, choose "tidal2bc: auto-wishlist on/off" in the userscript manager's menu. The same entry turns it back on.
+
+First time: open the browser console, open an album from the list, then check the `tidal2bc: resolved fields` line. The script reads the album id from a page key that is not confirmed yet. The console also shows the key names of the page data it can read your fan id from. If any field is missing, nothing is posted and the missing field is named.
+
+## Tests
+
+```sh
+uv run --with pytest --with tidalapi==0.8.11 pytest
+node --test tidal2bc.user.test.js
+```
