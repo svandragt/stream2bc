@@ -2,7 +2,7 @@
 
 Finds the Tidal albums you favourited, or where you favourited at least two tracks, and helps you add each album to your Bandcamp wishlist.
 
-The script lists the albums on a web page, with a Bandcamp search link for each one. A userscript in your own browser adds an album to your wishlist when you open it from that page.
+The script lists the albums in a table on a web page, with a link to the album on Tidal and a Bandcamp search link for each one. A userscript in your own browser adds an album to your wishlist when you open it from that page.
 
 ## Set up
 
@@ -22,7 +22,7 @@ The Tidal session is stored in `~/.config/tidal2bc/tidal-session.json`, readable
 uv run tidal2bc.py
 ```
 
-The script writes `out/albums.html`, which lists the albums that currently qualify. An album qualifies if you favourited the album, or if you favourited at least two of its tracks (change the limit with `--min-favs`). Each entry shows whether the album is a favourite and how many tracks you favourited. Albums that appeared most recently come first. An album that no longer qualifies drops off the page. The script remembers when it first listed each album in `~/.config/tidal2bc/seen.json`.
+The script writes `out/albums.html`, which lists the albums that currently qualify. An album qualifies if you favourited the album, or if you favourited at least two of its tracks (change the limit with `--min-favs`). Each row shows the artist, the album, whether the album is a favourite and how many tracks you favourited, a link to the album on Tidal, and a link that searches for it on Bandcamp. Albums that appeared most recently come first. An album that no longer qualifies drops off the page. The script remembers when it first listed each album in `~/.config/tidal2bc/seen.json`.
 
 To run it daily at 07:00 from cron:
 
@@ -35,7 +35,7 @@ If the Tidal session has expired, the script exits with an error and does not wa
 ## Add albums to your wishlist
 
 1. Open `out/albums.html` in your browser and log in to Bandcamp.
-2. Click a search link. The Bandcamp search opens in a new tab.
+2. Click a **Search** link. The Bandcamp search opens in a new tab.
 3. Click the matching album.
 
 The album is added to your wishlist when it opens. The button in the corner changes to "Wishlisted by tidal2bc", or to "tidal2bc: failed, see console".

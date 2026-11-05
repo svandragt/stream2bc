@@ -12,7 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 import tidalapi
 from tidalapi.exceptions import AuthenticationError
@@ -49,21 +49,28 @@ def bandcamp_search_url(album):
 
 
 def favourites_label(album):
-    n = f"{album['count']} favourite{'s' * (album['count'] != 1)}"
     if not album["favourite"]:
-        return n
-    return "favourite album" + (f", {n}" if album["count"] else "")
+        return str(album["count"])
+    return "favourite album" + (f", {album['count']}" if album["count"] else "")
+
+
+def link(url, text):
+    return f'<a href="{html.escape(url)}" target="_blank" rel="noopener">{text}</a>'
 
 
 def render_page(albums):
-    items = "\n".join(
-        f'<li><a href="{html.escape(bandcamp_search_url(a))}" target="_blank" rel="noopener">'
-        f'{html.escape(a["artist"])} - {html.escape(a["title"])}</a> ({favourites_label(a)})</li>'
+    rows = "\n".join(
+        f'<tr><td>{html.escape(a["artist"])}</td><td>{html.escape(a["title"])}</td><td>{favourites_label(a)}</td>'
+        f'<td>{link("https://tidal.com/browse/album/" + quote(a["id"], safe=""), "Tidal")}</td>'
+        f'<td>{link(bandcamp_search_url(a), "Search")}</td></tr>'
         for a in albums
     )
     return (
         '<!doctype html>\n<meta charset="utf-8">\n<title>Tidal albums for Bandcamp</title>\n'
-        f"<h1>Tidal albums for Bandcamp ({len(albums)})</h1>\n<ol>\n{items}\n</ol>\n"
+        "<style>table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:.25em .5em}</style>\n"
+        f"<h1>Tidal albums for Bandcamp ({len(albums)})</h1>\n<table>\n"
+        "<thead><tr><th>Artist</th><th>Album</th><th>Favourites</th><th>Tidal</th><th>Bandcamp</th></tr></thead>\n"
+        f"<tbody>\n{rows}\n</tbody>\n</table>\n"
     )
 
 
