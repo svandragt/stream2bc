@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["tidalapi==0.8.11"]
 # ///
-"""List Tidal albums with at least N favourite tracks, as a page of Bandcamp search links."""
+"""List Tidal albums you favourited, or with at least N favourite tracks, as a page of Bandcamp search links."""
 import argparse
 import html
 import json
@@ -20,9 +20,16 @@ from tidalapi.exceptions import AuthenticationError
 CONFIG_DIR = Path.home() / ".config" / "tidal2bc"
 
 
-def albums_to_track(tracks, min_favs=2):
-    """Group favourite tracks by album id; keep albums with >= min_favs, most favourites first."""
+def albums_to_track(tracks, min_favs=2, fav_albums=()):
+    """Merge favourite albums and favourite tracks by album id.
+
+    An album qualifies if it is a favourite album or has >= min_favs favourite tracks; most track favourites first.
+    """
     found = {}
+    for a in fav_albums:
+        if a.id is None or not a.name or a.artist is None or not a.artist.name:
+            continue
+        found[str(a.id)] = {"artist": a.artist.name, "title": a.name, "id": str(a.id), "count": 0, "favourite": True}
     for t in tracks:
         if t.album is None or t.album.id is None or t.artist is None or not t.album.name or not t.artist.name:
             continue
@@ -30,9 +37,9 @@ def albums_to_track(tracks, min_favs=2):
         # shortcut: tidalapi fills album.artist from the track's own artists for favourites (media.py:247),
         # so this is the first favourited track's artist; wrong for compilations
         artist = getattr(getattr(t.album, "artist", None), "name", None) or t.artist.name
-        entry = found.setdefault(key, {"artist": artist, "title": t.album.name, "id": key, "count": 0})
+        entry = found.setdefault(key, {"artist": artist, "title": t.album.name, "id": key, "count": 0, "favourite": False})
         entry["count"] += 1
-    kept = [a for a in found.values() if a["count"] >= min_favs]
+    kept = [a for a in found.values() if a["favourite"] or a["count"] >= min_favs]
     return sorted(kept, key=lambda a: -a["count"])  # sorted() is stable
 
 
@@ -41,10 +48,17 @@ def bandcamp_search_url(album):
     return f"https://bandcamp.com/search?q={quote_plus(album['artist'] + ' ' + album['title'])}&item_type=a#tidal2bc"
 
 
+def favourites_label(album):
+    n = f"{album['count']} favourite{'s' * (album['count'] != 1)}"
+    if not album["favourite"]:
+        return n
+    return "favourite album" + (f", {n}" if album["count"] else "")
+
+
 def render_page(albums):
     items = "\n".join(
         f'<li><a href="{html.escape(bandcamp_search_url(a))}" target="_blank" rel="noopener">'
-        f'{html.escape(a["artist"])} - {html.escape(a["title"])}</a> ({a["count"]} favourites)</li>'
+        f'{html.escape(a["artist"])} - {html.escape(a["title"])}</a> ({favourites_label(a)})</li>'
         for a in albums
     )
     return (
@@ -81,40 +95,60 @@ def write_atomic(path, text):
 
 
 def load_tracks_json(path):
-    """Return fake tracks from [{artist, album, album_id}]; raise ValueError if the file is unusable."""
+    """Return (fake tracks, fake favourite albums) from a list of tracks or {"tracks": [...], "albums": [...]}.
+
+    Rows are {artist, album, album_id}. Raise ValueError if the file is unusable.
+    """
     try:
-        rows = json.loads(Path(path).read_text())
+        data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as e:
         raise ValueError(f"cannot read tracks file {path}: {e}")
-    if not isinstance(rows, list):
-        raise ValueError(f"tracks file {path} must contain a JSON list")
-    tracks = []
-    for i, r in enumerate(rows):
-        try:
-            tracks.append(SimpleNamespace(artist=SimpleNamespace(name=r["artist"]),
-                                          album=SimpleNamespace(id=r["album_id"], name=r["album"])))
-        except (KeyError, TypeError):
-            raise ValueError(f"tracks file {path}: row {i} must be an object with artist, album and album_id")
-    return tracks
+    if isinstance(data, list):
+        data = {"tracks": data}
+    if not isinstance(data, dict) or not data.keys() & {"tracks", "albums"}:
+        raise ValueError(f'tracks file {path} must be a JSON list or an object with "tracks" and/or "albums" lists')
+    if not all(isinstance(data.get(k, []), list) for k in ("tracks", "albums")):
+        raise ValueError(f'tracks file {path}: "tracks" and "albums" must be JSON lists')
+
+    def build_track(r):
+        return SimpleNamespace(artist=SimpleNamespace(name=r["artist"]), album=SimpleNamespace(id=r["album_id"], name=r["album"]))
+
+    def build_album(r):
+        return SimpleNamespace(id=r["album_id"], name=r["album"], artist=SimpleNamespace(name=r["artist"]))
+
+    def rows(kind, build):
+        built = []
+        for i, r in enumerate(data.get(kind, [])):
+            try:
+                built.append(build(r))
+            except (KeyError, TypeError):
+                raise ValueError(f"tracks file {path}: {kind} row {i} must be an object with artist, album and album_id")
+        return built
+
+    return rows("tracks", build_track), rows("albums", build_album)
 
 
 class TidalError(Exception):
     """An expected Tidal failure whose message is shown as is."""
 
 
-def fetch_favourite_tracks(session, session_path):
+def fetch_favourites(session, session_path):
+    """Return (favourite tracks, favourite albums)."""
     if not session.load_session_from_file(session_path):
         raise TidalError(f"no Tidal session at {session_path}. Run: uv run tidal2bc.py --login")
     if not session.check_login():
         raise TidalError(f"Tidal session not valid (expired, or Tidal is unavailable). If this persists, run: uv run tidal2bc.py --login")
     favourites = session.user.favorites
-    tracks = []
-    # Not tracks_paginated: its worker (tidalapi/workers.py:func_wrapper) swallows page errors and returns fewer tracks.
-    # Pages can be short (unavailable tracks), so the count only bounds the offsets.
-    for offset in range(0, favourites.get_tracks_count(), 50):
-        tracks.extend(favourites.tracks(limit=50, offset=offset))
+
+    def fetch_all(count, page):
+        # Not *_paginated: its worker (tidalapi/workers.py:func_wrapper) swallows page errors and returns fewer items.
+        # Pages can be short (unavailable items), so the count only bounds the offsets.
+        return [item for offset in range(0, count, 50) for item in page(limit=50, offset=offset)]
+
+    tracks = fetch_all(favourites.get_tracks_count(), favourites.tracks)
+    albums = fetch_all(favourites.get_albums_count(), favourites.albums)
     session.save_session_to_file(session_path)  # persists tokens tidalapi refreshed during the run
-    return tracks
+    return tracks, albums
 
 
 def is_auth_error(e):
@@ -136,7 +170,7 @@ def fail(message):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--login", action="store_true", help="log in to Tidal interactively and save the session")
-    p.add_argument("--tracks-json", help="read [{artist, album, album_id}] from this file instead of Tidal")
+    p.add_argument("--tracks-json", help="read [{artist, album, album_id}] or {tracks: [...], albums: [...]} from this file instead of Tidal")
     p.add_argument("--session", type=Path, default=CONFIG_DIR / "tidal-session.json")
     p.add_argument("--state", type=Path, default=CONFIG_DIR / "seen.json")
     p.add_argument("--out", type=Path, default=Path("out/albums.html"))
@@ -159,19 +193,19 @@ def main(argv=None):
 
     if args.tracks_json:
         try:
-            tracks = load_tracks_json(args.tracks_json)
+            tracks, fav_albums = load_tracks_json(args.tracks_json)
         except ValueError as e:
             return fail(str(e))
     else:
         try:
-            tracks = fetch_favourite_tracks(session, args.session)
+            tracks, fav_albums = fetch_favourites(session, args.session)
         except TidalError as e:
             return fail(str(e))
         except Exception as e:
             hint = ". Run: uv run tidal2bc.py --login" if is_auth_error(e) else ""
             return fail(f"could not read Tidal favourites: {e}{hint}")
 
-    current = albums_to_track(tracks, args.min_favs)
+    current = albums_to_track(tracks, args.min_favs, fav_albums)
     now = datetime.now(timezone.utc).isoformat()
     new = [a for a in current if a["id"] not in seen]
     seen.update({a["id"]: now for a in new})

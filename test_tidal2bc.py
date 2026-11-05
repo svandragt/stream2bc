@@ -238,7 +238,10 @@ def test_null_album_id_rows_in_tracks_json_are_skipped(tmp_path):
     assert "Null" not in (tmp_path / "out" / "albums.html").read_text()
 
 
-@pytest.mark.parametrize("content", [None, "{bad", '{"a": 1}', '[{"artist": "A", "album": "X"}]', "[1]"])
+@pytest.mark.parametrize("content", [
+    None, "{bad", '{"a": 1}', '[{"artist": "A", "album": "X"}]', "[1]",
+    '{"tracks": "x"}', '{"albums": [{"artist": "A", "album": "X"}]}', '{"albums": [1]}',
+])
 def test_bad_tracks_json_exits_cleanly(tmp_path, capsys, content):
     if content is not None:
         (tmp_path / "tracks.json").write_text(content)
@@ -254,27 +257,35 @@ def test_non_string_state_values_do_not_break_sorting(tmp_path):
     assert run_main(tmp_path) == 0
 
 
-def fake_session(logged_in=True, pages=(), total=None, saved=None, calls=None):
-    """pages[i] is what tracks(limit=50, offset=50*i) returns (a list) or raises (an exception)."""
+def fake_session(logged_in=True, pages=(), total=None, saved=None, calls=None, album_pages=(), album_total=None):
+    """pages[i] is what tracks(limit=50, offset=50*i) returns (a list) or raises (an exception).
+    album_pages does the same for albums()."""
     calls = [] if calls is None else calls
 
-    def get_tracks_count():
-        calls.append("count")
-        return 50 * len(pages) if total is None else total
+    def pager(name, pages, total):
+        def count():
+            calls.append(f"{name}_count")
+            return 50 * len(pages) if total is None else total
 
-    def tracks(limit, offset):
-        calls.append(("tracks", limit, offset))
-        page = pages[offset // 50]
-        if isinstance(page, Exception):
-            raise page
-        return page
+        def page(limit, offset):
+            calls.append((name, limit, offset))
+            result = pages[offset // 50]
+            if isinstance(result, Exception):
+                raise result
+            return result
 
-    def tracks_paginated():
-        calls.append("tracks_paginated")
-        return []
+        return count, page
+
+    get_tracks_count, tracks = pager("tracks", pages, total)
+    get_albums_count, albums = pager("albums", album_pages, album_total)
 
     class FakeSession:
-        user = NS(favorites=NS(get_tracks_count=get_tracks_count, tracks=tracks, tracks_paginated=tracks_paginated))
+        user = NS(favorites=NS(
+            get_tracks_count=get_tracks_count, tracks=tracks,
+            get_albums_count=get_albums_count, albums=albums,
+            tracks_paginated=lambda: calls.append("tracks_paginated") or [],
+            albums_paginated=lambda: calls.append("albums_paginated") or [],
+        ))
 
         def load_session_from_file(self, path):
             return True
@@ -319,7 +330,7 @@ def test_short_pages_are_accepted(tmp_path, monkeypatch):
                         fake_session(pages=[[one] * 50, [one] * 50, [one] * 18], total=120, calls=calls, saved=saved))
     assert run_main_no_tracks(tmp_path) == 0
     assert "(118 favourites)" in (tmp_path / "albums.html").read_text()
-    assert calls == ["count", ("tracks", 50, 0), ("tracks", 50, 50), ("tracks", 50, 100)]
+    assert calls == ["tracks_count", ("tracks", 50, 0), ("tracks", 50, 50), ("tracks", 50, 100), "albums_count"]
     assert saved == [tmp_path / "s.json"]
 
 
@@ -332,7 +343,7 @@ def test_failing_page_fails_cleanly_without_writing_or_saving(tmp_path, monkeypa
     assert err.startswith("tidal2bc:") and "boom" in err and "Traceback" not in err
     assert not (tmp_path / "seen.json").exists() and not (tmp_path / "albums.html").exists()
     assert saved == []
-    assert "tracks_paginated" not in calls
+    assert "tracks_paginated" not in calls and "albums_paginated" not in calls
 
 
 def test_successful_fetch_saves_the_session(tmp_path, monkeypatch):
@@ -404,3 +415,70 @@ def test_min_favs_must_be_a_positive_integer(tmp_path, value):
     with pytest.raises(SystemExit) as e:
         run_main(tmp_path, "--min-favs", value)
     assert e.value.code == 2
+
+
+def album(artist, title, album_id):
+    return NS(id=album_id, name=title, artist=NS(name=artist) if artist is not None else None)
+
+
+def test_favourite_albums_qualify_without_track_favourites_and_use_the_album_artist():
+    got = tidal2bc.albums_to_track(
+        [track("Track Artist", "One", 1)],
+        fav_albums=[album("Album Artist", "One", 1), album("F", "Fav", 7)],
+    )
+    assert [(a["artist"], a["title"], a["id"], a["count"], a["favourite"]) for a in got] == [
+        ("Album Artist", "One", "1", 1, True),
+        ("F", "Fav", "7", 0, True),
+    ]
+
+
+def test_favourite_albums_skip_missing_ids_names_and_artists():
+    bad = [album("A", "X", None), album("A", "", 1), album("", "X", 2), album(None, "X", 3)]
+    assert tidal2bc.albums_to_track([], fav_albums=bad) == []
+
+
+def write_object_fixture(path, tracks, albums):
+    rows = lambda items: [{"artist": a, "album": t, "album_id": i} for a, t, i in items]
+    path.write_text(json.dumps({"tracks": rows(tracks), "albums": rows(albums)}))
+
+
+def test_object_fixture_lists_favourite_albums_once_with_their_labels(tmp_path, capsys):
+    write_object_fixture(
+        tmp_path / "tracks.json",
+        [("T", "Both", 1), ("T", "Both", 1), ("T", "Tracks", 2), ("T", "Tracks", 2), ("T", "Single", 3),
+         ("T", "FavOne", 8)],
+        [("Album Artist", "Both", 1), ("F", "FavOnly", 7), ("F", "FavOne", 8)],
+    )
+    assert run_main(tmp_path) == 0
+    assert "4 new" in capsys.readouterr().out
+    page = (tmp_path / "out" / "albums.html").read_text()
+    assert page.count("<li>") == 4
+    assert "Album Artist - Both</a> (favourite album, 2 favourites)" in page
+    assert "T - Tracks</a> (2 favourites)" in page
+    assert "F - FavOnly</a> (favourite album)" in page
+    assert "F - FavOne</a> (favourite album, 1 favourite)" in page
+    assert "Single" not in page
+    assert set(json.loads((tmp_path / "seen.json").read_text())) == {"1", "2", "7", "8"}
+
+
+def test_session_fetch_includes_favourite_albums(tmp_path, monkeypatch):
+    calls, saved = [], []
+    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(
+        pages=[[track("T", "One", 1)] * 2], album_pages=[[album("A", "Fav", 7)] * 50, [album("A", "Fav2", 8)]],
+        album_total=60, calls=calls, saved=saved))
+    assert run_main_no_tracks(tmp_path) == 0
+    page = (tmp_path / "albums.html").read_text()
+    assert "(favourite album)" in page and "Fav2" in page and "T - One</a> (2 favourites)" in page
+    assert ("albums", 50, 0) in calls and ("albums", 50, 50) in calls and "albums_paginated" not in calls
+    assert saved == [tmp_path / "s.json"]
+
+
+def test_failing_albums_page_fails_cleanly_without_writing_or_saving(tmp_path, monkeypatch, capsys):
+    saved = []
+    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(
+        pages=[[track("T", "One", 1)] * 2], album_pages=[RuntimeError("albums boom")], saved=saved))
+    assert run_main_no_tracks(tmp_path) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("tidal2bc:") and "albums boom" in err and "Traceback" not in err
+    assert not (tmp_path / "seen.json").exists() and not (tmp_path / "albums.html").exists()
+    assert saved == []

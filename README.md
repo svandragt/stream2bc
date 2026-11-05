@@ -1,6 +1,6 @@
 # tidal2bc
 
-Finds Tidal albums where you favourited at least two tracks, and helps you add each album to your Bandcamp wishlist.
+Finds the Tidal albums you favourited, or where you favourited at least two tracks, and helps you add each album to your Bandcamp wishlist.
 
 The script lists the albums on a web page, with a Bandcamp search link for each one. A userscript in your own browser adds an album to your wishlist when you open it from that page.
 
@@ -22,7 +22,7 @@ The Tidal session is stored in `~/.config/tidal2bc/tidal-session.json`, readable
 uv run tidal2bc.py
 ```
 
-The script writes `out/albums.html`, which lists the albums that currently have enough favourites, with their current counts. Albums that appeared most recently come first. An album you unfavourite drops off the page. The script remembers when it first listed each album in `~/.config/tidal2bc/seen.json`.
+The script writes `out/albums.html`, which lists the albums that currently qualify. An album qualifies if you favourited the album, or if you favourited at least two of its tracks (change the limit with `--min-favs`). Each entry shows whether the album is a favourite and how many tracks you favourited. Albums that appeared most recently come first. An album that no longer qualifies drops off the page. The script remembers when it first listed each album in `~/.config/tidal2bc/seen.json`.
 
 To run it daily at 07:00 from cron:
 
