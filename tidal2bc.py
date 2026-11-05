@@ -18,6 +18,7 @@ import tidalapi
 from tidalapi.exceptions import AuthenticationError
 
 CONFIG_DIR = Path.home() / ".config" / "tidal2bc"
+ALBUM_WEIGHT = 3  # a favourite album scores as much as this many favourite tracks
 
 
 def albums_to_track(tracks, min_favs=2, fav_albums=()):
@@ -48,29 +49,91 @@ def bandcamp_search_url(album):
     return f"https://bandcamp.com/search?q={quote_plus(album['artist'] + ' ' + album['title'])}&item_type=a#tidal2bc"
 
 
-def favourites_label(album):
-    if not album["favourite"]:
-        return str(album["count"])
-    return "favourite album" + (f", {album['count']}" if album["count"] else "")
+def score(album):
+    return album["count"] + (ALBUM_WEIGHT if album["favourite"] else 0)
 
 
 def link(url, text):
     return f'<a href="{html.escape(url)}" target="_blank" rel="noopener">{text}</a>'
 
 
+# (label, numeric); the first six columns are sortable, the page opens sorted by Score.
+SORTABLE = [("Artist", False), ("Album", False), ("Favourite album", True), ("Favourite tracks", True),
+            ("Score", True), ("First seen", False)]
+DEFAULT_SORT = "Score"
+
+# Sorts tbody rows by the clicked column's data-sort values; the first click is ascending, the next reverses.
+PAGE_SCRIPT = r"""(function () {
+  var heads = document.querySelectorAll("thead th");
+  var tbody = document.querySelector("tbody");
+  Array.prototype.forEach.call(heads, function (th, col) {
+    var button = th.querySelector("button");
+    if (!button) return;
+    button.addEventListener("click", function () {
+      var dir = th.getAttribute("aria-sort") === "ascending" ? -1 : 1;
+      var numeric = th.hasAttribute("data-numeric");
+      var value = function (row) {
+        var v = row.cells[col].getAttribute("data-sort");
+        return numeric ? Number(v) : v;
+      };
+      var rows = Array.prototype.slice.call(tbody.rows);
+      rows.sort(function (a, b) {
+        var x = value(a), y = value(b);
+        return dir * (numeric ? x - y : x.localeCompare(y));
+      });
+      rows.forEach(function (row) { tbody.appendChild(row); });
+      Array.prototype.forEach.call(heads, function (h) {
+        var arrow = h.querySelector(".arrow");
+        if (!arrow) return;
+        h.removeAttribute("aria-sort");
+        arrow.textContent = "";
+      });
+      th.setAttribute("aria-sort", dir > 0 ? "ascending" : "descending");
+      th.querySelector(".arrow").textContent = dir > 0 ? "\u25B2" : "\u25BC";
+    });
+  });
+})();"""
+
+
+def header_cell(label, numeric):
+    attrs = (" data-numeric" if numeric else "") + (' aria-sort="descending"' if label == DEFAULT_SORT else "")
+    arrow = "\u25bc" if label == DEFAULT_SORT else ""
+    return f'<th{attrs}><button type="button">{label} <span class="arrow">{arrow}</span></button></th>'
+
+
+def body_row(a):
+    day = a["first_seen"][:10]
+    cells = [
+        (html.escape(a["artist"]), a["artist"].lower()),
+        (html.escape(a["title"]), a["title"].lower()),
+        ("yes" if a["favourite"] else "", int(a["favourite"])),
+        (a["count"], a["count"]),
+        (score(a), score(a)),
+        (html.escape(day), day),
+    ]
+    tds = "".join(f'<td data-sort="{html.escape(str(key))}">{shown}</td>' for shown, key in cells)
+    tidal = link("https://tidal.com/browse/album/" + quote(a["id"], safe=""), "Tidal")
+    return f'<tr>{tds}<td>{tidal}</td><td>{link(bandcamp_search_url(a), "Search")}</td></tr>'
+
+
+def sort_albums(albums):
+    """Score descending, then first-seen date descending, then artist ascending (case-insensitive)."""
+    ordered = sorted(albums, key=lambda a: a["artist"].lower())  # each later sort is stable
+    ordered.sort(key=lambda a: a["first_seen"][:10], reverse=True)
+    ordered.sort(key=score, reverse=True)
+    return ordered
+
+
 def render_page(albums):
-    rows = "\n".join(
-        f'<tr><td>{html.escape(a["artist"])}</td><td>{html.escape(a["title"])}</td><td>{favourites_label(a)}</td>'
-        f'<td>{link("https://tidal.com/browse/album/" + quote(a["id"], safe=""), "Tidal")}</td>'
-        f'<td>{link(bandcamp_search_url(a), "Search")}</td></tr>'
-        for a in albums
-    )
+    """albums: dicts from albums_to_track plus "first_seen" (an ISO timestamp)."""
+    head = "".join(header_cell(label, numeric) for label, numeric in SORTABLE) + "<th>Tidal</th><th>Bandcamp</th>"
+    rows = "\n".join(body_row(a) for a in sort_albums(albums))
     return (
         '<!doctype html>\n<meta charset="utf-8">\n<title>Tidal albums for Bandcamp</title>\n'
         "<style>table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:.25em .5em}</style>\n"
         f"<h1>Tidal albums for Bandcamp ({len(albums)})</h1>\n<table>\n"
-        "<thead><tr><th>Artist</th><th>Album</th><th>Favourites</th><th>Tidal</th><th>Bandcamp</th></tr></thead>\n"
-        f"<tbody>\n{rows}\n</tbody>\n</table>\n"
+        f"<thead><tr>{head}</tr></thead>\n<tbody>\n{rows}\n</tbody>\n</table>\n"
+        f"<script>\n{PAGE_SCRIPT}\n</script>\n"
     )
 
 
@@ -91,7 +154,7 @@ def write_atomic(path, text):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
@@ -216,7 +279,7 @@ def main(argv=None):
     now = datetime.now(timezone.utc).isoformat()
     new = [a for a in current if a["id"] not in seen]
     seen.update({a["id"]: now for a in new})
-    albums = sorted(current, key=lambda a: str(seen[a["id"]]), reverse=True)  # newest first, stable
+    albums = [{**a, "first_seen": str(seen[a["id"]])} for a in current]
 
     for path, text in [(args.state, json.dumps(seen, indent=1)), (args.out, render_page(albums))]:
         try:

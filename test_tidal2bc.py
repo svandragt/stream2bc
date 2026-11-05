@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -91,9 +92,17 @@ def run_main(tmp_path, *extra):
     ])
 
 
-def table_rows(page):
-    """The raw HTML of each body row's cells: [artist, album, favourites, tidal link, bandcamp link]."""
-    return [re.findall(r"<td>(.*?)</td>", row, re.S) for row in re.findall(r"<tr>(.*?)</tr>", page, re.S) if "<td>" in row]
+def table_rows(page, sort_values=False):
+    """Each body row's cells as raw HTML (or their data-sort values):
+    [artist, album, favourite album, favourite tracks, score, first seen, tidal link, bandcamp link]."""
+    rows = [re.findall(r'<td(?: data-sort="(.*?)")?>(.*?)</td>', row, re.S)
+            for row in re.findall(r"<tr>(.*?)</tr>", page, re.S) if "<td" in row]
+    return [[cell[0 if sort_values else 1] for cell in row] for row in rows]
+
+
+def summary(page):
+    """[artist, album, favourite tracks] per row, in page order."""
+    return [[row[0], row[1], row[3]] for row in table_rows(page)]
 
 
 def test_second_run_adds_nothing_new_and_new_albums_come_first(tmp_path, capsys):
@@ -111,24 +120,88 @@ def test_second_run_adds_nothing_new_and_new_albums_come_first(tmp_path, capsys)
     assert run_main(tmp_path) == 0
     assert "1 new" in capsys.readouterr().out
     page = (tmp_path / "out" / "albums.html").read_text()
-    assert page.index("Three") < page.index("One")
-    assert "Two" in page
+    assert "Three" in page and "One" in page and "Two" in page
 
 
 def test_page_is_an_escaped_table_with_a_tidal_and_a_bandcamp_link_per_row(tmp_path):
-    write_fixture(tmp_path / "tracks.json", [("<b>Ar&t</b>", 'Al"<script>x</script>', 9)] * 2)
+    write_fixture(tmp_path / "tracks.json", [("<B>Ar&t</B>", 'Al"<script>x</script>', 9)] * 2)
     assert run_main(tmp_path) == 0
     page = (tmp_path / "out" / "albums.html").read_text()
-    assert "<script>" not in page and "<b>" not in page
-    assert re.findall(r"<th>(.*?)</th>", page) == ["Artist", "Album", "Favourites", "Tidal", "Bandcamp"]
+    assert "<B>" not in page and page.count("<script>") == 1  # only the page's own inline script
     assert "<thead>" in page and "<tbody>" in page
-    [(artist, title, favourites, tidal, bandcamp)] = table_rows(page)
-    assert artist == "&lt;b&gt;Ar&amp;t&lt;/b&gt;"
+    [(artist, title, favourite, tracks, score, seen, tidal, bandcamp)] = table_rows(page)
+    assert artist == "&lt;B&gt;Ar&amp;t&lt;/B&gt;"
     assert title == "Al&quot;&lt;script&gt;x&lt;/script&gt;"
-    assert favourites == "2"
+    assert (favourite, tracks, score) == ("", "2", "2")
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", seen)
     assert tidal == '<a href="https://tidal.com/browse/album/9" target="_blank" rel="noopener">Tidal</a>'
     assert bandcamp.startswith('<a href="https://bandcamp.com/search?q=')
     assert bandcamp.endswith('&amp;item_type=a#tidal2bc" target="_blank" rel="noopener">Search</a>')
+    [values] = table_rows(page, sort_values=True)
+    assert values[:6] == ["&lt;b&gt;ar&amp;t&lt;/b&gt;", "al&quot;&lt;script&gt;x&lt;/script&gt;", "0", "2", "2", seen]
+    assert values[6:] == ["", ""]
+
+
+def headers(page):
+    return [(m.group(1), re.sub(r"<[^>]+>|[\u25b2\u25bc]", "", m.group(2)).strip(), m.group(2))
+            for m in re.finditer(r"<th([^>]*)>(.*?)</th>", page, re.S)]
+
+
+def test_columns_and_default_sort_indicator(tmp_path):
+    write_fixture(tmp_path / "tracks.json", ROWS)
+    assert run_main(tmp_path) == 0
+    heads = headers((tmp_path / "out" / "albums.html").read_text())
+    assert [label for _, label, _ in heads] == [
+        "Artist", "Album", "Favourite album", "Favourite tracks", "Score", "First seen", "Tidal", "Bandcamp"]
+    assert [label for attrs, label, _ in heads if "aria-sort" in attrs] == ["Score"]
+    assert 'aria-sort="descending"' in heads[4][0] and "\u25bc" in heads[4][2]
+    assert all("\u25bc" not in inner and "\u25b2" not in inner for _, label, inner in heads if label != "Score")
+    assert [label for _, label, inner in heads if '<button type="button">' in inner] == [
+        "Artist", "Album", "Favourite album", "Favourite tracks", "Score", "First seen"]
+    assert [label for attrs, label, _ in heads if "data-numeric" in attrs] == [
+        "Favourite album", "Favourite tracks", "Score"]
+
+
+def test_score_adds_the_album_weight_for_favourite_albums():
+    assert tidal2bc.ALBUM_WEIGHT == 3
+    assert tidal2bc.score({"count": 2, "favourite": False}) == 2
+    assert tidal2bc.score({"count": 2, "favourite": True}) == 5
+    assert tidal2bc.score({"count": 0, "favourite": True}) == 3
+
+
+def test_default_order_is_score_then_first_seen_then_artist_case_insensitively(tmp_path):
+    def rows(artist, title, album_id, n):
+        return [(artist, title, album_id)] * n
+
+    tracks = rows("alpha", "A", 2, 3) + rows("beta", "B", 3, 3) + rows("Carol", "C", 4, 2) + rows("Dave", "D", 5, 2)
+    albums = [("Zed", "Z", 1), ("Carol", "C", 4)]
+    write_object_fixture(tmp_path / "tracks.json", tracks, albums)
+    (tmp_path / "seen.json").write_text(json.dumps({
+        "1": "2020-01-01T00:00:00+00:00", "2": "2020-01-01T23:00:00+00:00", "3": "2021-01-01T00:00:00+00:00",
+        "4": "2019-01-01T00:00:00+00:00", "5": "2022-01-01T00:00:00+00:00"}))
+    assert run_main(tmp_path) == 0
+    rows_out = table_rows((tmp_path / "out" / "albums.html").read_text())
+    assert [(r[0], r[4], r[5]) for r in rows_out] == [
+        ("Carol", "5", "2019-01-01"),
+        ("beta", "3", "2021-01-01"),
+        ("alpha", "3", "2020-01-01"),
+        ("Zed", "3", "2020-01-01"),
+        ("Dave", "2", "2022-01-01"),
+    ]
+    assert [r[2] for r in rows_out] == ["yes", "", "", "yes", ""]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_inline_script_sorts_the_table_in_node(tmp_path):
+    def rows(artist, title, album_id, n):
+        return [(artist, title, album_id)] * n
+
+    write_object_fixture(tmp_path / "tracks.json",
+                         rows("b", "Two", 2, 10) + rows("A", "One", 1, 9) + rows("c", "Three", 3, 2) + rows("D", "Four", 4, 2), [])
+    assert run_main(tmp_path) == 0
+    r = subprocess.run(["node", str(SCRIPT.parent / "check_page_script.js"), str(tmp_path / "out" / "albums.html")],
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_page_style_leaves_link_colours_to_the_browser(tmp_path):
@@ -170,7 +243,7 @@ def test_page_shows_current_counts_and_drops_albums_that_no_longer_qualify(tmp_p
     write_fixture(tmp_path / "tracks.json", [("A", "One", 1)] * 3 + [("B", "Two", 2)])
     run_main(tmp_path)
     page = (tmp_path / "out" / "albums.html").read_text()
-    assert [row[:3] for row in table_rows(page)] == [["A", "One", "3"]]
+    assert summary(page) == [["A", "One", "3"]]
     assert set(json.loads((tmp_path / "seen.json").read_text())) == {"1", "2"}
 
     write_fixture(tmp_path / "tracks.json", ROWS)
@@ -350,7 +423,7 @@ def test_short_pages_are_accepted(tmp_path, monkeypatch):
     monkeypatch.setattr(tidal2bc.tidalapi, "Session",
                         fake_session(pages=[[one] * 50, [one] * 50, [one] * 18], total=120, calls=calls, saved=saved))
     assert run_main_no_tracks(tmp_path) == 0
-    assert [row[:3] for row in table_rows((tmp_path / "albums.html").read_text())] == [["A", "One", "118"]]
+    assert summary((tmp_path / "albums.html").read_text()) == [["A", "One", "118"]]
     assert calls == ["tracks_count", ("tracks", 50, 0), ("tracks", 50, 50), ("tracks", 50, 100), "albums_count"]
     assert saved == [tmp_path / "s.json"]
 
@@ -473,15 +546,15 @@ def test_object_fixture_lists_favourite_albums_once_with_their_labels(tmp_path, 
     assert run_main(tmp_path) == 0
     assert "4 new" in capsys.readouterr().out
     rows = table_rows((tmp_path / "out" / "albums.html").read_text())
-    assert [row[:3] for row in rows] == [
-        ["Album Artist", "Both", "favourite album, 2"],
-        ["T", "Tracks", "2"],
-        ["F", "FavOne", "favourite album, 1"],
-        ["F", "FavOnly", "favourite album"],
+    assert [row[:5] for row in rows] == [
+        ["Album Artist", "Both", "yes", "2", "5"],
+        ["F", "FavOne", "yes", "1", "4"],
+        ["F", "FavOnly", "yes", "0", "3"],
+        ["T", "Tracks", "", "2", "2"],
     ]
-    for row, album_id in zip(rows, [1, 2, 8, 7]):
-        assert f'href="https://tidal.com/browse/album/{album_id}"' in row[3]
-        assert 'item_type=a#tidal2bc"' in row[4] and row[4].endswith(">Search</a>")
+    for row, album_id in zip(rows, [1, 8, 7, 2]):
+        assert f'href="https://tidal.com/browse/album/{album_id}"' in row[6]
+        assert 'item_type=a#tidal2bc"' in row[7] and row[7].endswith(">Search</a>")
     assert set(json.loads((tmp_path / "seen.json").read_text())) == {"1", "2", "7", "8"}
 
 
@@ -492,7 +565,7 @@ def test_session_fetch_includes_favourite_albums(tmp_path, monkeypatch):
         album_total=60, calls=calls, saved=saved))
     assert run_main_no_tracks(tmp_path) == 0
     rows = table_rows((tmp_path / "albums.html").read_text())
-    assert sorted(row[:3] for row in rows) == [["A", "Fav", "favourite album"], ["A", "Fav2", "favourite album"], ["T", "One", "2"]]
+    assert sorted(row[:4] for row in rows) == [["A", "Fav", "yes", "0"], ["A", "Fav2", "yes", "0"], ["T", "One", "", "2"]]
     assert ("albums", 50, 0) in calls and ("albums", 50, 50) in calls and "albums_paginated" not in calls
     assert saved == [tmp_path / "s.json"]
 

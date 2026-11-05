@@ -22,7 +22,19 @@ The Tidal session is stored in `~/.config/tidal2bc/tidal-session.json`, readable
 uv run tidal2bc.py
 ```
 
-The script writes `out/albums.html`, which lists the albums that currently qualify. An album qualifies if you favourited the album, or if you favourited at least two of its tracks (change the limit with `--min-favs`). Each row shows the artist, the album, whether the album is a favourite and how many tracks you favourited, a link to the album on Tidal, and a link that searches for it on Bandcamp. Albums that appeared most recently come first. An album that no longer qualifies drops off the page. The script remembers when it first listed each album in `~/.config/tidal2bc/seen.json`.
+The script writes `out/albums.html`, which lists the albums that currently qualify. An album qualifies if you favourited the album, or if you favourited at least two of its tracks (change the limit with `--min-favs`). An album that no longer qualifies drops off the page. The script remembers when it first listed each album in `~/.config/tidal2bc/seen.json`.
+
+Each row shows:
+
+- **Artist** and **Album**.
+- **Favourite album**: "yes" if you favourited the album.
+- **Favourite tracks**: how many of its tracks you favourited.
+- **Score**: the favourite tracks, plus 3 if you favourited the album.
+- **First seen**: the date the script first listed the album.
+- **Tidal**: a link to the album on Tidal.
+- **Bandcamp**: a **Search** link that looks for the album on Bandcamp.
+
+The page opens with the highest score first. Albums with the same score are ordered by the date they were first seen, newest first, and then by artist. To sort by another column, click its heading. Click it again to reverse the order. The arrow in the heading shows the current sort.
 
 To run it daily at 07:00 from cron:
 
