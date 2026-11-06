@@ -17,7 +17,7 @@ from urllib.parse import quote, quote_plus
 import tidalapi
 from tidalapi.exceptions import AuthenticationError
 
-CONFIG_DIR = Path.home() / ".config" / "tidal2bc"
+CONFIG_DIR = Path.home() / ".config" / "stream2bc"
 ALBUM_WEIGHT = 3  # a favourite album scores as much as this many favourite tracks
 
 
@@ -46,7 +46,7 @@ def albums_to_track(tracks, min_favs=2, fav_albums=()):
 
 def bandcamp_search_url(album):
     # The hash is never sent to Bandcamp; the userscript reads it to know the page was opened from this list.
-    return f"https://bandcamp.com/search?q={quote_plus(album['artist'] + ' ' + album['title'])}&item_type=a#tidal2bc"
+    return f"https://bandcamp.com/search?q={quote_plus(album['artist'] + ' ' + album['title'])}&item_type=a#stream2bc"
 
 
 def score(album):
@@ -205,9 +205,9 @@ class TidalError(Exception):
 def fetch_favourites(session, session_path):
     """Return (favourite tracks, favourite albums)."""
     if not session.load_session_from_file(session_path):
-        raise TidalError(f"no Tidal session at {session_path}. Run: uv run tidal2bc.py --login")
+        raise TidalError(f"no Tidal session at {session_path}. Run: uv run stream2bc.py --login")
     if not session.check_login():
-        raise TidalError(f"Tidal session not valid (expired, or Tidal is unavailable). If this persists, run: uv run tidal2bc.py --login")
+        raise TidalError(f"Tidal session not valid (expired, or Tidal is unavailable). If this persists, run: uv run stream2bc.py --login")
     favourites = session.user.favorites
 
     def fetch_all(count, page):
@@ -233,7 +233,7 @@ def positive_int(text):
 
 
 def fail(message):
-    print(f"tidal2bc: {message}", file=sys.stderr)
+    print(f"stream2bc: {message}", file=sys.stderr)
     return 1
 
 
@@ -272,7 +272,7 @@ def main(argv=None):
         except TidalError as e:
             return fail(str(e))
         except Exception as e:
-            hint = ". Run: uv run tidal2bc.py --login" if is_auth_error(e) else ""
+            hint = ". Run: uv run stream2bc.py --login" if is_auth_error(e) else ""
             return fail(f"could not read Tidal favourites: {e}{hint}")
 
     current = albums_to_track(tracks, args.min_favs, fav_albums)

@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         tidal2bc: add to wishlist
-// @namespace    tidal2bc
+// @name         stream2bc: add to wishlist
+// @namespace    stream2bc
 // @version      0.3
-// @description  Wishlists albums opened from your tidal2bc list, and adds a manual button to album pages.
+// @description  Wishlists albums opened from your stream2bc list, and adds a manual button to album pages.
 // @match        https://*.bandcamp.com/album/*
 // @match        https://bandcamp.com/search*
 // @grant        unsafeWindow
@@ -13,7 +13,7 @@
 // ==/UserScript==
 
 // With any @grant the script runs in a sandbox, so the page's own FanControls and TralbumData are read via unsafeWindow.
-const MARKER = "#tidal2bc";
+const MARKER = "#stream2bc";
 const AUTO_KEY = "autoWishlist";
 
 const NO_DOC = { querySelector: () => null, getElementById: () => null };
@@ -70,21 +70,21 @@ async function addToWishlist(win, button, notify = (ok, message) => win.alert(me
   try {
     const doc = win.document || NO_DOC;
     const fields = resolveFields(win);
-    console.log("tidal2bc: resolved fields", fields);
-    console.log("tidal2bc: page item_type", win.TralbumData?.item_type,
+    console.log("stream2bc: resolved fields", fields);
+    console.log("stream2bc: page item_type", win.TralbumData?.item_type,
       "| crumb element present", !!doc.getElementById("js-crumbs-data"),
       "| pagedata blob keys", Object.keys(pageBlob(doc) || {}));
     const missing = Object.keys(fields).filter((k) => !fields[k]);
     if (missing.length) {
-      notify(false, "tidal2bc: could not find " + missing.join(", ") + ". Nothing was posted.");
+      notify(false, "stream2bc: could not find " + missing.join(", ") + ". Nothing was posted.");
       return;
     }
     const res = await postWishlist(win, doc, fields);
-    console.log("tidal2bc: response", res);
-    notify(isOk(res), isOk(res) ? "tidal2bc: added to wishlist" : "tidal2bc: failed (see console)");
+    console.log("stream2bc: response", res);
+    notify(isOk(res), isOk(res) ? "stream2bc: added to wishlist" : "stream2bc: failed (see console)");
   } catch (e) {
-    console.error("tidal2bc: request threw", e);
-    notify(false, "tidal2bc: failed (see console)");
+    console.error("stream2bc: request threw", e);
+    notify(false, "stream2bc: failed (see console)");
   } finally {
     button.disabled = false;
   }
@@ -118,7 +118,7 @@ async function autoWishlist(win, page, button, enabled) {
   if (!enabled) return;
   await addToWishlist(page, button, (ok, message) => {
     if (!ok) console.error(message);
-    button.textContent = ok ? "Wishlisted by tidal2bc" : "tidal2bc: failed, see console";
+    button.textContent = ok ? "Wishlisted by stream2bc" : "stream2bc: failed, see console";
   });
 }
 
@@ -126,13 +126,13 @@ if (typeof document === "undefined") {
   module.exports = { resolveFields, addToWishlist, tagSearchLinks, watchSearchPage, autoWishlist, isAutoOn, toggleAuto }; // node test only
 } else {
   const gm = { getValue: GM_getValue, setValue: GM_setValue };
-  GM_registerMenuCommand("tidal2bc: auto-wishlist on/off", () => {
-    alert("tidal2bc: auto-wishlist is now " + (toggleAuto(gm) ? "ON" : "OFF"));
+  GM_registerMenuCommand("stream2bc: auto-wishlist on/off", () => {
+    alert("stream2bc: auto-wishlist is now " + (toggleAuto(gm) ? "ON" : "OFF"));
   });
   if (location.pathname.startsWith("/album/")) {
     const page = typeof unsafeWindow === "undefined" ? window : unsafeWindow;
     const button = document.createElement("button");
-    button.textContent = "Add to wishlist (tidal2bc)";
+    button.textContent = "Add to wishlist (stream2bc)";
     button.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:99999;padding:8px 12px;cursor:pointer";
     button.addEventListener("click", () => addToWishlist(page, button));
     document.body.appendChild(button);

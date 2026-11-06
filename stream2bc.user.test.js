@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { resolveFields, addToWishlist, tagSearchLinks, watchSearchPage, autoWishlist, isAutoOn, toggleAuto } =
-  require("./tidal2bc.user.js");
+  require("./stream2bc.user.js");
 
 const logs = [];
 console.log = (...args) => logs.push(args);
@@ -172,15 +172,15 @@ test("tags album links on a search page once, and leaves other links alone", () 
     { href: "https://a.bandcamp.com/album/x?from=search" },
     { href: "https://a.bandcamp.com/track/y?from=search" },
     { href: "https://bandcamp.com/search?q=z" },
-    { href: "https://b.bandcamp.com/album/w#tidal2bc" },
+    { href: "https://b.bandcamp.com/album/w#stream2bc" },
   ];
   tagSearchLinks(searchDoc(links));
   tagSearchLinks(searchDoc(links));
   assert.deepStrictEqual(links.map((l) => l.href), [
-    "https://a.bandcamp.com/album/x?from=search#tidal2bc",
+    "https://a.bandcamp.com/album/x?from=search#stream2bc",
     "https://a.bandcamp.com/track/y?from=search",
     "https://bandcamp.com/search?q=z",
-    "https://b.bandcamp.com/album/w#tidal2bc",
+    "https://b.bandcamp.com/album/w#stream2bc",
   ]);
 });
 
@@ -196,14 +196,14 @@ test("search page: tags only with the marker, and tags links that render later",
   assert.strictEqual(links[0].href, "https://a.bandcamp.com/album/x");
   assert.strictEqual(observers.length, 0);
 
-  win.location.hash = "#tidal2bc";
+  win.location.hash = "#stream2bc";
   watchSearchPage(win);
-  assert.strictEqual(links[0].href, "https://a.bandcamp.com/album/x#tidal2bc");
+  assert.strictEqual(links[0].href, "https://a.bandcamp.com/album/x#stream2bc");
   links.push({ href: "https://c.bandcamp.com/album/late" });
   observers[0]();
   observers[0]();
-  assert.strictEqual(links[1].href, "https://c.bandcamp.com/album/late#tidal2bc");
-  assert.strictEqual(links[0].href, "https://a.bandcamp.com/album/x#tidal2bc");
+  assert.strictEqual(links[1].href, "https://c.bandcamp.com/album/late#stream2bc");
+  assert.strictEqual(links[0].href, "https://a.bandcamp.com/album/x#stream2bc");
 });
 
 function albumPage(hash, response = { ok: true }) {
@@ -216,23 +216,23 @@ function albumPage(hash, response = { ok: true }) {
     TralbumData: TD,
     FanControls: { fan_id: 1, doPost: async () => { order.push("post"); return response; } },
   });
-  return { sandbox, page, order, button: { disabled: false, textContent: "Add to wishlist (tidal2bc)" } };
+  return { sandbox, page, order, button: { disabled: false, textContent: "Add to wishlist (stream2bc)" } };
 }
 
 test("album page with the marker clears the hash, then posts once and shows the result in the button", async () => {
-  const { sandbox, page, order, button } = albumPage("#tidal2bc");
+  const { sandbox, page, order, button } = albumPage("#stream2bc");
   await autoWishlist(sandbox, page, button, true);
   assert.deepStrictEqual(order, [["replaceState", null, "", "/album/x?from=search"], "post"]);
-  assert.strictEqual(button.textContent, "Wishlisted by tidal2bc");
+  assert.strictEqual(button.textContent, "Wishlisted by stream2bc");
   assert.deepStrictEqual(page.alerts, []);
   await autoWishlist(sandbox, page, button, true);
   assert.strictEqual(order.filter((x) => x === "post").length, 1);
 });
 
 test("a failed automatic post is shown in the button label", async () => {
-  const { sandbox, page, button } = albumPage("#tidal2bc", { error: "nope" });
+  const { sandbox, page, button } = albumPage("#stream2bc", { error: "nope" });
   await autoWishlist(sandbox, page, button, true);
-  assert.strictEqual(button.textContent, "tidal2bc: failed, see console");
+  assert.strictEqual(button.textContent, "stream2bc: failed, see console");
   assert.deepStrictEqual(page.alerts, []);
 });
 
@@ -240,7 +240,7 @@ test("album page without the marker does not post or touch the history", async (
   const { sandbox, page, order, button } = albumPage("");
   await autoWishlist(sandbox, page, button, true);
   assert.deepStrictEqual(order, []);
-  assert.strictEqual(button.textContent, "Add to wishlist (tidal2bc)");
+  assert.strictEqual(button.textContent, "Add to wishlist (stream2bc)");
 });
 
 test("auto-wishlist toggle defaults on, flips, and stops the automatic post when off", async () => {
@@ -248,9 +248,9 @@ test("auto-wishlist toggle defaults on, flips, and stops the automatic post when
   const gm = { getValue: (k, d) => (k in store ? store[k] : d), setValue: (k, v) => { store[k] = v; } };
   assert.strictEqual(isAutoOn(gm), true);
   assert.strictEqual(toggleAuto(gm), false);
-  const { sandbox, page, order, button } = albumPage("#tidal2bc");
+  const { sandbox, page, order, button } = albumPage("#stream2bc");
   await autoWishlist(sandbox, page, button, isAutoOn(gm));
   assert.deepStrictEqual(order, [["replaceState", null, "", "/album/x?from=search"]]);
-  assert.strictEqual(button.textContent, "Add to wishlist (tidal2bc)");
+  assert.strictEqual(button.textContent, "Add to wishlist (stream2bc)");
   assert.strictEqual(toggleAuto(gm), true);
 });

@@ -12,9 +12,9 @@ from types import SimpleNamespace as NS
 import pytest
 import requests
 
-import tidal2bc
+import stream2bc
 
-SCRIPT = Path(tidal2bc.__file__)
+SCRIPT = Path(stream2bc.__file__)
 
 
 def track(artist, album, album_id):
@@ -28,12 +28,12 @@ def test_albums_to_track_threshold_sorting_and_none_album():
         track("C", "Three", 3), track("C", "Three", 3), track("C", "Three", 3),
         track("D", None, None), track("D", None, None),
     ]
-    got = tidal2bc.albums_to_track(tracks)
+    got = stream2bc.albums_to_track(tracks)
     assert [(a["artist"], a["title"], a["id"], a["count"]) for a in got] == [
         ("C", "Three", "3", 3),
         ("A", "One", "1", 2),
     ]
-    assert [a["id"] for a in tidal2bc.albums_to_track(tracks, min_favs=1)] == ["3", "1", "2"]
+    assert [a["id"] for a in stream2bc.albums_to_track(tracks, min_favs=1)] == ["3", "1", "2"]
 
 
 @pytest.fixture(autouse=True)
@@ -50,14 +50,14 @@ def test_albums_to_track_skips_tracks_without_artist_or_names():
         track("", "One", 1),
         track("A", "", 1),
     ]
-    assert tidal2bc.albums_to_track(tracks) == []
-    assert [a["count"] for a in tidal2bc.albums_to_track(tracks, min_favs=1)] == [1]
+    assert stream2bc.albums_to_track(tracks) == []
+    assert [a["count"] for a in stream2bc.albums_to_track(tracks, min_favs=1)] == [1]
 
 
 def test_albums_to_track_skips_albums_without_id():
     no_id = NS(artist=NS(name="A"), album=NS(id=None, name="One"))
     tracks = [no_id, no_id, track("B", "Two", 2), track("B", "Two", 2)]
-    assert [a["id"] for a in tidal2bc.albums_to_track(tracks)] == ["2"]
+    assert [a["id"] for a in stream2bc.albums_to_track(tracks)] == ["2"]
 
 
 def test_albums_to_track_prefers_album_artist_and_falls_back_to_track_artist():
@@ -69,14 +69,14 @@ def test_albums_to_track_prefers_album_artist_and_falls_back_to_track_artist():
         (None, "Track Artist"),
         (NS(name=""), "Track Artist"),
     ]:
-        got = tidal2bc.albums_to_track([with_album_artist(album_artist)], min_favs=1)
+        got = stream2bc.albums_to_track([with_album_artist(album_artist)], min_favs=1)
         assert got[0]["artist"] == expected
-    assert tidal2bc.albums_to_track([track("T", "X", 1)], min_favs=1)[0]["artist"] == "T"
+    assert stream2bc.albums_to_track([track("T", "X", 1)], min_favs=1)[0]["artist"] == "T"
 
 
 def test_albums_to_track_groups_by_id_not_name():
     tracks = [track("A", "Same", 1), track("A", "Same", 2), track("A", "Same", 2)]
-    assert [(a["id"], a["count"]) for a in tidal2bc.albums_to_track(tracks)] == [("2", 2)]
+    assert [(a["id"], a["count"]) for a in stream2bc.albums_to_track(tracks)] == [("2", 2)]
 
 
 def write_fixture(path, rows):
@@ -84,7 +84,7 @@ def write_fixture(path, rows):
 
 
 def run_main(tmp_path, *extra):
-    return tidal2bc.main([
+    return stream2bc.main([
         "--tracks-json", str(tmp_path / "tracks.json"),
         "--state", str(tmp_path / "seen.json"),
         "--out", str(tmp_path / "out" / "albums.html"),
@@ -136,7 +136,7 @@ def test_page_is_an_escaped_table_with_a_tidal_and_a_bandcamp_link_per_row(tmp_p
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", seen)
     assert tidal == '<a href="https://tidal.com/browse/album/9" target="_blank" rel="noopener">Tidal</a>'
     assert bandcamp.startswith('<a href="https://bandcamp.com/search?q=')
-    assert bandcamp.endswith('&amp;item_type=a#tidal2bc" target="_blank" rel="noopener">Search</a>')
+    assert bandcamp.endswith('&amp;item_type=a#stream2bc" target="_blank" rel="noopener">Search</a>')
     [values] = table_rows(page, sort_values=True)
     assert values[:6] == ["&lt;b&gt;ar&amp;t&lt;/b&gt;", "al&quot;&lt;script&gt;x&lt;/script&gt;", "0", "2", "2", seen]
     assert values[6:] == ["", ""]
@@ -163,10 +163,10 @@ def test_columns_and_default_sort_indicator(tmp_path):
 
 
 def test_score_adds_the_album_weight_for_favourite_albums():
-    assert tidal2bc.ALBUM_WEIGHT == 3
-    assert tidal2bc.score({"count": 2, "favourite": False}) == 2
-    assert tidal2bc.score({"count": 2, "favourite": True}) == 5
-    assert tidal2bc.score({"count": 0, "favourite": True}) == 3
+    assert stream2bc.ALBUM_WEIGHT == 3
+    assert stream2bc.score({"count": 2, "favourite": False}) == 2
+    assert stream2bc.score({"count": 2, "favourite": True}) == 5
+    assert stream2bc.score({"count": 0, "favourite": True}) == 3
 
 
 def test_default_order_is_score_then_first_seen_then_artist_case_insensitively(tmp_path):
@@ -269,7 +269,7 @@ def test_bad_state_file_exits_cleanly(tmp_path, capsys, content, message):
     (tmp_path / "seen.json").write_text(content)
     assert run_main(tmp_path) == 1
     err = capsys.readouterr().err
-    assert f"tidal2bc: state file {tmp_path / 'seen.json'} {message}" in err
+    assert f"stream2bc: state file {tmp_path / 'seen.json'} {message}" in err
     assert "Traceback" not in err
     assert not (tmp_path / "out" / "albums.html").exists()
 
@@ -291,18 +291,18 @@ def test_writes_are_atomic(tmp_path, monkeypatch):
 
 
 def test_favourites_fetch_error_is_reported_cleanly(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(pages=[RuntimeError("boom")]))
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", fake_session(pages=[RuntimeError("boom")]))
     rc = run_main_no_tracks(tmp_path)
     err = capsys.readouterr().err
     assert rc == 1
-    assert err.startswith("tidal2bc:") and "boom" in err and "Traceback" not in err
+    assert err.startswith("stream2bc:") and "boom" in err and "Traceback" not in err
     assert "--login" not in err
 
 
 def test_state_dir_and_file_are_private(tmp_path):
     write_fixture(tmp_path / "tracks.json", ROWS)
     cfg = tmp_path / "cfg"
-    tidal2bc.main(["--tracks-json", str(tmp_path / "tracks.json"), "--state", str(cfg / "seen.json"),
+    stream2bc.main(["--tracks-json", str(tmp_path / "tracks.json"), "--state", str(cfg / "seen.json"),
                    "--out", str(tmp_path / "albums.html")])
     assert stat.S_IMODE(cfg.stat().st_mode) == 0o700
     assert stat.S_IMODE((cfg / "seen.json").stat().st_mode) == 0o600
@@ -318,9 +318,9 @@ def test_login_runs_with_private_umask(tmp_path, monkeypatch):
             path.write_text("{}")
             return True
 
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", FakeSession)
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", FakeSession)
     session = tmp_path / "cfg" / "tidal-session.json"
-    assert tidal2bc.main(["--login", "--session", str(session)]) == 0
+    assert stream2bc.main(["--login", "--session", str(session)]) == 0
     assert seen["umask"] == 0o077
     assert stat.S_IMODE(session.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(session.stat().st_mode) == 0o600
@@ -341,7 +341,7 @@ def test_bad_tracks_json_exits_cleanly(tmp_path, capsys, content):
         (tmp_path / "tracks.json").write_text(content)
     assert run_main(tmp_path) == 1
     err = capsys.readouterr().err
-    assert err.startswith("tidal2bc:") and "tracks" in err and "Traceback" not in err
+    assert err.startswith("stream2bc:") and "tracks" in err and "Traceback" not in err
     assert not (tmp_path / "out" / "albums.html").exists()
 
 
@@ -399,13 +399,13 @@ def fake_session(logged_in=True, pages=(), total=None, saved=None, calls=None, a
     fake_session(logged_in=False),
 ])
 def test_authentication_failures_suggest_login(tmp_path, monkeypatch, capsys, session_class):
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", session_class)
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", session_class)
     assert run_main_no_tracks(tmp_path) == 1
     assert "--login" in capsys.readouterr().err
 
 
 def test_other_http_errors_do_not_suggest_login(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session",
+    monkeypatch.setattr(stream2bc.tidalapi, "Session",
                         fake_session(pages=[requests.HTTPError("503 Server Error", response=NS(status_code=503))]))
     assert run_main_no_tracks(tmp_path) == 1
     err = capsys.readouterr().err
@@ -413,14 +413,14 @@ def test_other_http_errors_do_not_suggest_login(tmp_path, monkeypatch, capsys):
 
 
 def run_main_no_tracks(tmp_path):
-    return tidal2bc.main(["--session", str(tmp_path / "s.json"), "--state", str(tmp_path / "seen.json"),
+    return stream2bc.main(["--session", str(tmp_path / "s.json"), "--state", str(tmp_path / "seen.json"),
                           "--out", str(tmp_path / "albums.html")])
 
 
 def test_short_pages_are_accepted(tmp_path, monkeypatch):
     calls, saved = [], []
     one = track("A", "One", 1)
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session",
+    monkeypatch.setattr(stream2bc.tidalapi, "Session",
                         fake_session(pages=[[one] * 50, [one] * 50, [one] * 18], total=120, calls=calls, saved=saved))
     assert run_main_no_tracks(tmp_path) == 0
     assert summary((tmp_path / "albums.html").read_text()) == [["A", "One", "118"]]
@@ -431,10 +431,10 @@ def test_short_pages_are_accepted(tmp_path, monkeypatch):
 def test_failing_page_fails_cleanly_without_writing_or_saving(tmp_path, monkeypatch, capsys):
     calls, saved = [], []
     pages = [[track("A", "One", 1)] * 50, RuntimeError("boom")]
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(pages=pages, total=120, calls=calls, saved=saved))
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", fake_session(pages=pages, total=120, calls=calls, saved=saved))
     assert run_main_no_tracks(tmp_path) == 1
     err = capsys.readouterr().err
-    assert err.startswith("tidal2bc:") and "boom" in err and "Traceback" not in err
+    assert err.startswith("stream2bc:") and "boom" in err and "Traceback" not in err
     assert not (tmp_path / "seen.json").exists() and not (tmp_path / "albums.html").exists()
     assert saved == []
     assert "tracks_paginated" not in calls and "albums_paginated" not in calls
@@ -442,7 +442,7 @@ def test_failing_page_fails_cleanly_without_writing_or_saving(tmp_path, monkeypa
 
 def test_successful_fetch_saves_the_session(tmp_path, monkeypatch):
     saved = []
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session",
+    monkeypatch.setattr(stream2bc.tidalapi, "Session",
                         fake_session(pages=[[track("A", "One", 1)] * 2], saved=saved))
     assert run_main_no_tracks(tmp_path) == 0
     assert saved == [tmp_path / "s.json"]
@@ -450,18 +450,18 @@ def test_successful_fetch_saves_the_session(tmp_path, monkeypatch):
 
 
 def test_invalid_session_message_mentions_expiry_or_outage(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(logged_in=False))
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", fake_session(logged_in=False))
     assert run_main_no_tracks(tmp_path) == 1
     assert capsys.readouterr().err == (
-        "tidal2bc: Tidal session not valid (expired, or Tidal is unavailable). "
-        "If this persists, run: uv run tidal2bc.py --login\n"
+        "stream2bc: Tidal session not valid (expired, or Tidal is unavailable). "
+        "If this persists, run: uv run stream2bc.py --login\n"
     )
 
 
 def test_state_is_validated_before_the_tidal_fetch(tmp_path, monkeypatch, capsys):
     calls = []
     (tmp_path / "seen.json").write_text("{not json")
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(calls=calls))
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", fake_session(calls=calls))
     assert run_main_no_tracks(tmp_path) == 1
     assert "is not valid JSON" in capsys.readouterr().err
     assert calls == []
@@ -472,13 +472,13 @@ def test_unreadable_state_file_exits_cleanly(tmp_path, capsys):
     (tmp_path / "seen.json").mkdir()
     assert run_main(tmp_path) == 1
     err = capsys.readouterr().err
-    assert err.startswith("tidal2bc:") and str(tmp_path / "seen.json") in err and "Traceback" not in err
+    assert err.startswith("stream2bc:") and str(tmp_path / "seen.json") in err and "Traceback" not in err
 
 
 def test_write_errors_name_the_path_and_state_is_written_before_the_page(tmp_path, monkeypatch, capsys):
     write_fixture(tmp_path / "tracks.json", ROWS)
     written = []
-    real = tidal2bc.write_atomic
+    real = stream2bc.write_atomic
 
     def fail_on_page(path, text):
         written.append(path.name)
@@ -486,7 +486,7 @@ def test_write_errors_name_the_path_and_state_is_written_before_the_page(tmp_pat
             raise OSError("disk full")
         real(path, text)
 
-    monkeypatch.setattr(tidal2bc, "write_atomic", fail_on_page)
+    monkeypatch.setattr(stream2bc, "write_atomic", fail_on_page)
     assert run_main(tmp_path) == 1
     assert written == ["seen.json", "albums.html"]
     err = capsys.readouterr().err
@@ -516,7 +516,7 @@ def album(artist, title, album_id):
 
 
 def test_favourite_albums_qualify_without_track_favourites_and_use_the_album_artist():
-    got = tidal2bc.albums_to_track(
+    got = stream2bc.albums_to_track(
         [track("Track Artist", "One", 1)],
         fav_albums=[album("Album Artist", "One", 1), album("F", "Fav", 7)],
     )
@@ -528,7 +528,7 @@ def test_favourite_albums_qualify_without_track_favourites_and_use_the_album_art
 
 def test_favourite_albums_skip_missing_ids_names_and_artists():
     bad = [album("A", "X", None), album("A", "", 1), album("", "X", 2), album(None, "X", 3)]
-    assert tidal2bc.albums_to_track([], fav_albums=bad) == []
+    assert stream2bc.albums_to_track([], fav_albums=bad) == []
 
 
 def write_object_fixture(path, tracks, albums):
@@ -554,13 +554,13 @@ def test_object_fixture_lists_favourite_albums_once_with_their_labels(tmp_path, 
     ]
     for row, album_id in zip(rows, [1, 8, 7, 2]):
         assert f'href="https://tidal.com/browse/album/{album_id}"' in row[6]
-        assert 'item_type=a#tidal2bc"' in row[7] and row[7].endswith(">Search</a>")
+        assert 'item_type=a#stream2bc"' in row[7] and row[7].endswith(">Search</a>")
     assert set(json.loads((tmp_path / "seen.json").read_text())) == {"1", "2", "7", "8"}
 
 
 def test_session_fetch_includes_favourite_albums(tmp_path, monkeypatch):
     calls, saved = [], []
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", fake_session(
         pages=[[track("T", "One", 1)] * 2], album_pages=[[album("A", "Fav", 7)] * 50, [album("A", "Fav2", 8)]],
         album_total=60, calls=calls, saved=saved))
     assert run_main_no_tracks(tmp_path) == 0
@@ -572,10 +572,10 @@ def test_session_fetch_includes_favourite_albums(tmp_path, monkeypatch):
 
 def test_failing_albums_page_fails_cleanly_without_writing_or_saving(tmp_path, monkeypatch, capsys):
     saved = []
-    monkeypatch.setattr(tidal2bc.tidalapi, "Session", fake_session(
+    monkeypatch.setattr(stream2bc.tidalapi, "Session", fake_session(
         pages=[[track("T", "One", 1)] * 2], album_pages=[RuntimeError("albums boom")], saved=saved))
     assert run_main_no_tracks(tmp_path) == 1
     err = capsys.readouterr().err
-    assert err.startswith("tidal2bc:") and "albums boom" in err and "Traceback" not in err
+    assert err.startswith("stream2bc:") and "albums boom" in err and "Traceback" not in err
     assert not (tmp_path / "seen.json").exists() and not (tmp_path / "albums.html").exists()
     assert saved == []
